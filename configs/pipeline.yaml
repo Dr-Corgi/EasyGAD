@@ -1,0 +1,26 @@
+# Complete GAD Pipeline Configuration
+# This file defines the complete pipeline with all stages
+
+pipeline:
+  stages:
+    - name: "seqkd"
+      config: "configs/seqkd.yaml"
+      description: "SeqKD baseline - SFT on teacher data"
+      checkpoint_output: "checkpoints/seqkd"
+
+    - name: "warmup"
+      config: "configs/warmup.yaml"
+      description: "Warmup stage - Student rollout + Discriminator + SFT"
+      checkpoint_input: "checkpoints/seqkd"
+      checkpoint_output: "checkpoints/warmup"
+
+    - name: "gad"
+      config: "configs/gad.yaml"
+      description: "GAD training - Student rollout + Discriminator + PPO"
+      checkpoint_input: "checkpoints/warmup"
+      checkpoint_output: "checkpoints/gad"
+
+    - name: "eval"
+      config: "configs/eval.yaml"
+      description: "Evaluation - Generation only"
+      checkpoint_input: "checkpoints/gad"

@@ -1,0 +1,15 @@
+# Evaluation Stage Configuration
+# This stage only performs generation, no training
+
+trainer:
+  training_stage: "eval"
+  total_epochs: 1
+  val_only: true
+  val_before_train: true
+
+actor_rollout_ref:
+  rollout:
+    n: 1
+    temperature: 0.0
+    val_kwargs:
+      do_sample: false

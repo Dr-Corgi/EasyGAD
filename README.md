@@ -120,6 +120,8 @@ python tools/export_lmsys_parquet.py
 bash scripts/train/run_gad_full.sh \
   --model /tmp/Qwen2.5-7B-Instruct \
   --reward_model /tmp/Qwen2.5-7B-Instruct \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
   --exp_name gpt5-chat-filtered-7b-full \
   --nnodes 1 \
   --warmup_epochs 2 \
@@ -131,11 +133,36 @@ bash scripts/train/run_gad_full.sh \
 |:---|:---|:---:|
 | `--model` | 学生模型路径 | 必填 |
 | `--reward_model` | 奖励模型路径 | 必填 |
+| `--train_files` | 训练数据路径 | `/tmp/lmsys_gpt5_chat_filtered_train.parquet` |
+| `--val_files` | 验证数据路径 | `/tmp/lmsys_gpt5_chat_filtered_test.parquet` |
 | `--exp_name` | 实验名称 | 必填 |
 | `--nnodes` | 节点数量 | 必填 |
 | `--warmup_epochs` | Warmup 轮数 | 2 |
 | `--gad_epochs` | GAD 训练轮数 | 4 |
 | `--resume_step` | 从 Warmup 恢复的检查点步数 | 50 |
+
+### 直接使用预训练模型
+
+如果你已有训练好的 HuggingFace 格式的 Actor 和 Critic 模型，可以直接进行 GAD 训练：
+
+```bash
+bash scripts/train/run_gad_direct.sh \
+  --actor_path /path/to/pretrained/actor \
+  --critic_path /path/to/pretrained/critic \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
+  --exp_name gpt5-chat-filtered-7b-direct \
+  --nnodes 1
+```
+
+| 参数 | 说明 | 默认值 |
+|:---|:---|:---:|
+| `--actor_path` | 预训练 Actor 模型路径 | 必填 |
+| `--critic_path` | 预训练 Critic 模型路径 | 必填 |
+| `--train_files` | 训练数据路径 | `/tmp/lmsys_gpt5_chat_filtered_train.parquet` |
+| `--val_files` | 验证数据路径 | `/tmp/lmsys_gpt5_chat_filtered_test.parquet` |
+| `--exp_name` | 实验名称 | `gad_direct` |
+| `--nnodes` | 节点数量 | 1 |
 
 ### 分阶段训练
 
@@ -144,6 +171,8 @@ bash scripts/train/run_gad_full.sh \
 bash scripts/train/run_warmup.sh \
   --model /tmp/Qwen2.5-7B-Instruct \
   --reward_model /tmp/Qwen2.5-7B-Instruct \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
   --exp_name gpt5-chat-filtered-7b-warmup-lr1e-6 \
   --nnodes 1
 
@@ -157,11 +186,15 @@ echo ${STEP} > /tmp/gpt5-chat-filtered-7b-adversarial-lr1e-6/latest_checkpointed
 bash scripts/train/run_gad.sh \
   --exp_name gpt5-chat-filtered-7b-adversarial-lr1e-6 \
   --resume_step $STEP \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
   --nnodes 1
 
 # 3. SeqKD（可选）：在教师数据上 SFT，用于对比实验
 bash scripts/train/run_seqkd.sh \
   --model /tmp/Qwen2.5-7B-Instruct \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
   --exp_name gpt5-chat-filtered-7b-seqkd-lr5e-6 \
   --nnodes 1
 ```
@@ -221,7 +254,7 @@ EasyGAD/
 │   ├── seqkd.yaml / warmup.yaml / gad.yaml / eval.yaml
 │   └── pipeline.yaml
 └── scripts/                           # 训练脚本
-    ├── train/ (run_seqkd.sh, run_warmup.sh, run_gad.sh)
+    ├── train/ (run_seqkd.sh, run_warmup.sh, run_gad.sh, run_gad_direct.sh, run_gad_full.sh)
     ├── generate/ (generate.sh, parallel_generate.sh)
     ├── run_stage.py
     └── run_pipeline.py

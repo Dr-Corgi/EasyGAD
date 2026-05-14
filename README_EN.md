@@ -112,6 +112,58 @@ This creates:
 
 ## 🚀 Quick Start
 
+### One-Click Full Pipeline
+
+Use `run_gad_full.sh` to run both Warmup and GAD stages in one command:
+
+```bash
+bash scripts/train/run_gad_full.sh \
+  --model /tmp/Qwen2.5-7B-Instruct \
+  --reward_model /tmp/Qwen2.5-7B-Instruct \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
+  --exp_name gpt5-chat-filtered-7b-full \
+  --nnodes 1 \
+  --warmup_epochs 2 \
+  --gad_epochs 4 \
+  --resume_step 50
+```
+
+| Parameter | Description | Default |
+|:---|:---|:---:|
+| `--model` | Student model path | Required |
+| `--reward_model` | Reward model path | Required |
+| `--train_files` | Training data path | `/tmp/lmsys_gpt5_chat_filtered_train.parquet` |
+| `--val_files` | Validation data path | `/tmp/lmsys_gpt5_chat_filtered_test.parquet` |
+| `--exp_name` | Experiment name | Required |
+| `--nnodes` | Number of nodes | Required |
+| `--warmup_epochs` | Warmup epochs | 2 |
+| `--gad_epochs` | GAD training epochs | 4 |
+| `--resume_step` | Checkpoint step to resume from Warmup | 50 |
+
+### Direct Training with Pretrained Models
+
+If you already have pretrained HuggingFace Actor and Critic models, you can run GAD directly:
+
+```bash
+bash scripts/train/run_gad_direct.sh \
+  --actor_path /path/to/pretrained/actor \
+  --critic_path /path/to/pretrained/critic \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
+  --exp_name gpt5-chat-filtered-7b-direct \
+  --nnodes 1
+```
+
+| Parameter | Description | Default |
+|:---|:---|:---:|
+| `--actor_path` | Pretrained Actor model path | Required |
+| `--critic_path` | Pretrained Critic model path | Required |
+| `--train_files` | Training data path | `/tmp/lmsys_gpt5_chat_filtered_train.parquet` |
+| `--val_files` | Validation data path | `/tmp/lmsys_gpt5_chat_filtered_test.parquet` |
+| `--exp_name` | Experiment name | `gad_direct` |
+| `--nnodes` | Number of nodes | 1 |
+
 ### Stage-by-Stage Training
 
 ```bash
@@ -119,6 +171,8 @@ This creates:
 bash scripts/train/run_warmup.sh \
   --model /tmp/Qwen2.5-7B-Instruct \
   --reward_model /tmp/Qwen2.5-7B-Instruct \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
   --exp_name gpt5-chat-filtered-7b-warmup-lr1e-6 \
   --nnodes 1
 
@@ -132,11 +186,15 @@ echo ${STEP} > /tmp/gpt5-chat-filtered-7b-adversarial-lr1e-6/latest_checkpointed
 bash scripts/train/run_gad.sh \
   --exp_name gpt5-chat-filtered-7b-adversarial-lr1e-6 \
   --resume_step $STEP \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
   --nnodes 1
 
 # 3. SeqKD (Optional): SFT on teacher data for comparison
 bash scripts/train/run_seqkd.sh \
   --model /tmp/Qwen2.5-7B-Instruct \
+  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
+  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
   --exp_name gpt5-chat-filtered-7b-seqkd-lr5e-6 \
   --nnodes 1
 ```
@@ -196,7 +254,7 @@ EasyGAD/
 │   ├── seqkd.yaml / warmup.yaml / gad.yaml / eval.yaml
 │   └── pipeline.yaml
 └── scripts/                           # Training scripts
-    ├── train/ (run_seqkd.sh, run_warmup.sh, run_gad.sh)
+    ├── train/ (run_seqkd.sh, run_warmup.sh, run_gad.sh, run_gad_direct.sh, run_gad_full.sh)
     ├── generate/ (generate.sh, parallel_generate.sh)
     ├── run_stage.py
     └── run_pipeline.py

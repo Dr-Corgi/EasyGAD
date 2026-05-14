@@ -112,6 +112,31 @@ python tools/export_lmsys_parquet.py
 
 ## 🚀 快速开始
 
+### 一键运行完整流水线
+
+使用 `run_gad_full.sh` 可一键完成 Warmup 和 GAD 两个阶段：
+
+```bash
+bash scripts/train/run_gad_full.sh \
+  --model /tmp/Qwen2.5-7B-Instruct \
+  --reward_model /tmp/Qwen2.5-7B-Instruct \
+  --exp_name gpt5-chat-filtered-7b-full \
+  --nnodes 1 \
+  --warmup_epochs 2 \
+  --gad_epochs 4 \
+  --resume_step 50
+```
+
+| 参数 | 说明 | 默认值 |
+|:---|:---|:---:|
+| `--model` | 学生模型路径 | 必填 |
+| `--reward_model` | 奖励模型路径 | 必填 |
+| `--exp_name` | 实验名称 | 必填 |
+| `--nnodes` | 节点数量 | 必填 |
+| `--warmup_epochs` | Warmup 轮数 | 2 |
+| `--gad_epochs` | GAD 训练轮数 | 4 |
+| `--resume_step` | 从 Warmup 恢复的检查点步数 | 50 |
+
 ### 分阶段训练
 
 ```bash

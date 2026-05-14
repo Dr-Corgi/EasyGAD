@@ -1,6 +1,6 @@
 #!/bin/bash
 # GAD Direct Training - Directly use pretrained HuggingFace models (no warmup needed)
-# Usage: ./run_gad_direct.sh --actor_path /path/to/actor --critic_path /path/to/critic --exp_name my_exp --nnodes 1
+# Usage: ./run_gad_direct.sh --actor_path /path/to/actor --critic_path /path/to/critic --train_files <train_file> --val_files <val_file> --exp_name my_exp --nnodes 1
 set -x
 
 export NCCL_TIMEOUT=36000
@@ -8,6 +8,8 @@ export NCCL_TIMEOUT=36000
 # Default values
 ACTOR_PATH=""
 CRITIC_PATH=""
+TRAIN_FILES="/tmp/lmsys_gpt5_chat_filtered_train.parquet"
+VAL_FILES="/tmp/lmsys_gpt5_chat_filtered_test.parquet"
 EXP_NAME="gad_direct"
 NNODES=1
 
@@ -19,6 +21,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --critic_path)
             CRITIC_PATH="$2"
+            shift 2
+            ;;
+        --train_files)
+            TRAIN_FILES="$2"
+            shift 2
+            ;;
+        --val_files)
+            VAL_FILES="$2"
             shift 2
             ;;
         --exp_name)
@@ -75,8 +85,8 @@ mkdir -p $OUTPUT_DIR
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.prompt_key=content \
-    data.train_files=/tmp/lmsys_gpt5_chat_filtered_train.parquet \
-    data.val_files=/tmp/lmsys_gpt5_chat_filtered_test.parquet \
+    data.train_files=$TRAIN_FILES \
+    data.val_files=$VAL_FILES \
     data.train_batch_size=256 \
     data.val_batch_size=600 \
     data.max_prompt_length=2048 \

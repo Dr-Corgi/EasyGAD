@@ -1,12 +1,26 @@
 #!/bin/bash
 # SeqKD Stage - Supervised Fine-tuning on Teacher Responses
+# Usage: ./run_seqkd.sh --model <model_path> --train_files <train_file> --val_files <val_file> --exp_name <exp_name> --nnodes <nnodes>
 set -x
 
 export NCCL_TIMEOUT=36000
+
+# Default values
+TRAIN_FILES="/tmp/lmsys_gpt5_chat_filtered_train.parquet"
+VAL_FILES="/tmp/lmsys_gpt5_chat_filtered_test.parquet"
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --model)
             MODEL_PATH="$2"
+            shift 2
+            ;;
+        --train_files)
+            TRAIN_FILES="$2"
+            shift 2
+            ;;
+        --val_files)
+            VAL_FILES="$2"
             shift 2
             ;;
         --exp_name)
@@ -34,8 +48,8 @@ export HYDRA_FULL_ERROR=1
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.prompt_key=content \
-    data.train_files=/tmp/lmsys_gpt5_chat_filtered_train.parquet \
-    data.val_files=/tmp/lmsys_gpt5_chat_filtered_test.parquet \
+    data.train_files=$TRAIN_FILES \
+    data.val_files=$VAL_FILES \
     data.train_batch_size=256 \
     data.val_batch_size=600 \
     data.max_prompt_length=2048 \

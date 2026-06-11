@@ -1088,6 +1088,9 @@ algorithm:
 # config for the trainer
 trainer:
 
+  # Training stage identifier. Can be overridden by sub-configs (e.g., "gad", "warmup", "seqkd")
+  training_stage: null
+
   # Whether to balance batch sizes across distributed workers
   balance_batch: True
 

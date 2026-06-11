@@ -84,6 +84,8 @@ mkdir -p $OUTPUT_DIR
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
+    trainer.training_stage=gad \
+    actor_rollout_ref.actor.policy_loss.loss_mode=clip_cov \
     data.prompt_key=content \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VAL_FILES \

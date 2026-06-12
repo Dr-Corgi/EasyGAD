@@ -278,6 +278,23 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             )
             data.batch["advantages"] = advantages
             data.batch["returns"] = returns
+    elif adv_estimator == AdvantageEstimator.TLGAD:
+        # TLGAD: Token-Level GAD with dynamic policy divergence
+        # Compute sequence-level advantages here; token-level modulation is applied in update_policy
+        grpo_calculation_mask = data.batch["response_mask"]
+        if multi_turn:
+            response_length = grpo_calculation_mask.size(1)
+            grpo_calculation_mask = data.batch["loss_mask"][:, -response_length:]
+
+        advantages, returns = core_algos.compute_tlgad_advantage(
+            token_level_rewards=data.batch["token_level_rewards"],
+            response_mask=grpo_calculation_mask,
+            index=data.non_tensor_batch["uid"],
+            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+            config=config,
+        )
+        data.batch["advantages"] = advantages
+        data.batch["returns"] = returns
     else:
         # handle all other adv estimator type other than GAE and GRPO
         adv_estimator_fn = core_algos.get_adv_estimator_fn(adv_estimator)
@@ -379,6 +396,7 @@ class RayPPOTrainer:
         - seqkd: SeqKD baseline - SFT on teacher data, no critic
         - warmup: Warmup stage - Student rollout + Discriminator + SFT
         - gad: GAD training - Student rollout + Discriminator + PPO
+        - tlgad: Token-Level GAD - Token-level credit assignment with EMA reference
         - eval: Evaluation only - No training, just generation
         """
         stage = self.training_stage
@@ -395,6 +413,12 @@ class RayPPOTrainer:
             # GAD training: use critic as discriminator, PPO update
             self.use_reference_policy = False
             self.use_critic = True
+        elif stage == "tlgad":
+            # TLGAD: Token-Level GAD with EMA reference policy
+            # Uses critic as discriminator, requires EMA reference for token-level modulation
+            self.use_reference_policy = False  # EMA reference is managed internally
+            self.use_critic = True
+            self.use_ema_reference = True  # Flag for EMA reference policy
         elif stage == "eval":
             # Eval: no training, just generation
             self.use_reference_policy = False
@@ -412,6 +436,7 @@ class RayPPOTrainer:
                 AdvantageEstimator.RLOO,
                 AdvantageEstimator.OPO,
                 AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
+                AdvantageEstimator.TLGAD,
             ]:
                 self.use_critic = True  # Use critic as discriminator for GRPO
             else:
@@ -536,6 +561,15 @@ class RayPPOTrainer:
         if config.actor_rollout_ref.rollout.multi_turn.enable:
             assert config.actor_rollout_ref.rollout.multi_turn.tool_config_path is not None or config.actor_rollout_ref.rollout.multi_turn.interaction_config_path is not None, "tool_config_path or interaction_config_path must be set when enabling multi_turn with tool, due to no role-playing support"
             assert config.algorithm.adv_estimator in [AdvantageEstimator.GRPO], "only GRPO is tested for multi-turn with tool"
+
+        # Validate that use_kl_in_reward is disabled when use_reference_policy is False
+        # This prevents KeyError: 'ref_log_prob' when apply_kl_penalty is called
+        if config.algorithm.use_kl_in_reward and not self.use_reference_policy:
+            raise ValueError(
+                f"`algorithm.use_kl_in_reward=True` requires reference policy, but "
+                f"`training_stage={self.training_stage}` disables reference policy. "
+                f"Please set `algorithm.use_kl_in_reward=false` for this training stage."
+            )
 
         print("[validate_config] All configuration checks passed successfully!")
 
@@ -1291,6 +1325,13 @@ class RayPPOTrainer:
                     }
                 )
                 # collect metrics
+                # For seqkd stage, map teacher_ prefixed fields to standard field names
+                # since compute_data_metrics expects standard field names
+                if self.training_stage == "seqkd":
+                    batch.batch["token_level_scores"] = batch.batch["teacher_token_level_rewards"]
+                    batch.batch["token_level_rewards"] = batch.batch["teacher_token_level_rewards"]
+                    batch.batch["advantages"] = batch.batch["teacher_advantages"]
+                    batch.batch["returns"] = batch.batch["teacher_returns"]
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
                 # TODO: implement actual tflpo and theoretical tflpo

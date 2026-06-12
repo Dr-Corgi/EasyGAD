@@ -84,7 +84,11 @@ if [ $OMPI_COMM_WORLD_RANK -eq 0 ]; then
                 mkdir -p /tmp/${EXP_NAME}/global_step_${CKPT}/actor/huggingface/
                 # Copy all non-.pt files to huggingface directory
                 find /tmp/${EXP_NAME}/global_step_${CKPT}/actor/ -maxdepth 1 -type f ! -name "*.pt" -exec cp {} /tmp/${EXP_NAME}/global_step_${CKPT}/actor/huggingface/ \;
-                python tools/merge_model2hf.py --local_dir /tmp/${EXP_NAME}/global_step_${CKPT}/actor
+                python3 tools/merge_model2hf.py --local_dir /tmp/${EXP_NAME}/global_step_${CKPT}/actor
+                if [ $? -ne 0 ]; then
+                    echo "Error: Failed to merge model for checkpoint ${CKPT}!"
+                    exit 1
+                fi
             fi
         else
             model_path="$MODEL_PATH"
@@ -100,8 +104,8 @@ if [ $OMPI_COMM_WORLD_RANK -eq 0 ]; then
         python3 -m verl.trainer.main_ppo \
             algorithm.adv_estimator=grpo \
             data.prompt_key=content \
-            data.train_files=/tmp/lmsys_gpt5_chat_4k_filtered_train.parquet \
-            data.val_files=/tmp/${VAL_DATA}_gpt5_chat_4k_filtered_test.parquet \
+            data.train_files=/tmp/lmsys_gpt5_chat_filtered_train.parquet \
+            data.val_files=/tmp/lmsys_gpt5_chat_filtered_train.parquet \
             data.train_batch_size=256 \
             data.val_batch_size=600 \
             data.max_prompt_length=2048 \

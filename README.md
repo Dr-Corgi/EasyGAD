@@ -1,227 +1,182 @@
-<div align="center">
+# Black-Box On-Policy Distillation of Large Language Models
 
-# EasyGAD
+This repository contains the unified implementation for our paper **"Black-Box On-Policy Distillation of Large Language Models"**.
 
-**大语言模型黑盒策略蒸馏实现**
+This is a **self-contained** repository that integrates all dependencies - no need to clone external repositories.
 
-<p align="center">
-  <a href="https://arxiv.org/abs/2511.10643">
-    <img src="https://img.shields.io/badge/Paper-arXiv-red?style=flat-square&logo=arxiv" alt="Paper">
-  </a>
-  <a href="https://huggingface.co/datasets/ytz20/LMSYS-Chat-GPT-5-Chat-Response">
-    <img src="https://img.shields.io/badge/Dataset-HuggingFace-yellow?style=flat-square&logo=huggingface" alt="Dataset">
-  </a>
-  <a href="https://huggingface.co/collections/ytz20/gad-models">
-    <img src="https://img.shields.io/badge/Models-HuggingFace-yellow?style=flat-square&logo=huggingface" alt="Models">
-  </a>
-  <img src="https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python" alt="Python">
-  <img src="https://img.shields.io/badge/PyTorch-2.6+-orange?style=flat-square&logo=pytorch" alt="PyTorch">
-</p>
+📄 **Paper**: [arXiv:2511.10643](https://arxiv.org/abs/2511.10643)
 
-<p align="center">
-  <a href="#-项目简介">简介</a> •
-  <a href="#-环境配置">环境配置</a> •
-  <a href="#-快速开始">快速开始</a> •
-  <a href="#-项目结构">项目结构</a>
-</p>
+💾 **Data**: [LMSYS-Chat-GPT-5-Chat-Response](https://huggingface.co/datasets/ytz20/LMSYS-Chat-GPT-5-Chat-Response)
 
-<p align="center">
-  简体中文 | <a href="README_EN.md">English</a>
-</p>
+🤖 **Models**: [GAD Models](https://huggingface.co/collections/ytz20/gad-models)
 
-</div>
+## 🚀 Overview
 
----
+This is a **unified pipeline** that integrates all four training stages without requiring branch switching:
 
-## 📖 项目简介
+| Stage | Description | Actor Update | Critic |
+|-------|-------------|--------------|--------|
+| `seqkd` | SeqKD baseline | SFT on teacher data | Not used |
+| `warmup` | GAD warmup | SFT on teacher data | Discriminator |
+| `gad` | GAD training | PPO with advantages | Discriminator |
+| `tlgad` | Token-Level GAD | PPO with token-level credit assignment | Discriminator |
+| `eval` | Evaluation only | No update | Not used |
 
-本项目实现了论文 [Black-Box On-Policy Distillation of Large Language Models](https://arxiv.org/abs/2511.10643) 中提出的 **GAD (Generative Adversarial Distillation)** 算法。
+## 🔧 Environment Setup
 
-> 💡 如需官方实现，请参考 [microsoft/LMOps/gad](https://github.com/microsoft/LMOps/tree/main/gad) 和 [YTianZHU/verl](https://github.com/YTianZHU/verl)。
+### Docker Environment (Recommended)
 
-GAD 是一种面向大语言模型的知识蒸馏方法。通过对抗训练，学生模型能够在仅访问教师模型黑盒输出的情况下，学习教师模型的输出风格和能力。
-
-### ✨ 为什么选择 EasyGAD？
-
-官方实现需要跨多个仓库和分支才能完成完整实验，本项目提供**一站式解决方案**：
-
-| | 官方实现 | EasyGAD |
-|:---:|:---:|:---:|
-| 仓库依赖 | 多个外部仓库 | **单一仓库** |
-| 分支切换 | 不同阶段切换分支 | **统一分支** |
-| 环境配置 | 需分别配置 | **一次配置** |
-| 流水线 | 手动串联 | **一键运行** |
-
-### 🎯 核心特性
-
-- 🚀 **开箱即用**：所有依赖内置，克隆即可开始训练
-- 🔧 **灵活配置**：支持多阶段独立训练或端到端流水线
-- 📦 **完整生态**：集成数据处理、训练、评估全流程
-- 🐳 **Docker 支持**：提供预配置镜像，快速上手
-
-### 🎯 训练阶段
-
-| 阶段 | 描述 | Actor 更新 | Critic |
-|:---:|:---:|:---:|:---:|
-| `seqkd` | SeqKD 基线 | 在教师数据上 SFT | 不使用 |
-| `warmup` | GAD 预热 | 在教师数据上 SFT | 判别器 |
-| `gad` | GAD 主训练 | PPO + 优势估计 | 判别器 |
-| `eval` | 仅评估 | 无更新 | 不使用 |
-
----
-
-## 🔧 环境配置
-
-### Docker 环境（推荐）
-
-推荐使用 `czwin32768/verl2:v0.2.0-vllm085` 镜像，已预装 `python==3.10.12`, `pytorch==2.6.0`, `vllm==0.8.5`。
+We use `czwin32768/verl2:v0.2.0-vllm085` which has `python==3.10.12, pytorch==2.6.0, vllm==0.8.5` as the recommended docker image.
 
 ```bash
-# 拉取并运行容器
+# Pull and run the docker container
 docker pull czwin32768/verl2:v0.2.0-vllm085
 docker run -it --gpus all czwin32768/verl2:v0.2.0-vllm085
 
-# 进入容器后
+# Inside the container
 cd /tmp
-# 将本仓库复制或挂载到 /tmp/gad
+# Copy or mount this repository to /tmp/gad
 cd /tmp/gad
 ```
 
-### 手动安装
+### Manual Installation
 
 ```bash
+# Install the verl library
 pip install -e . --no-deps
-pip install torchdata rouge-score datasets --upgrade
+
+# Install additional dependencies
+pip install torchdata
+pip install rouge-score
+pip install datasets --upgrade
 ```
 
----
+## 📦 Data Preparation
 
-## 📦 数据准备
-
-从 HuggingFace 下载教师数据：
+Download the teacher data from HuggingFace:
 
 ```bash
 python tools/export_lmsys_parquet.py
 ```
 
-执行后将生成：
-- `/tmp/lmsys_gpt5_chat_filtered_train.parquet` — 训练数据
-- `/tmp/lmsys_gpt5_chat_filtered_test.parquet` — 测试数据
+This will create:
+- `/tmp/lmsys_gpt5_chat_filtered_train.parquet` - Training data
+- `/tmp/lmsys_gpt5_chat_filtered_test.parquet` - Test data
 
----
+## 🔧 Quick Start
 
-## 🚀 快速开始
+### One-Command Training (Recommended)
 
-### 一键运行完整流水线
+We provide unified scripts that run the complete training pipeline in one command:
 
-使用 `run_gad_full.sh` 可一键完成 Warmup 和 GAD 两个阶段：
+#### Full GAD Training (Warmup + GAD)
 
 ```bash
-bash scripts/train/run_gad_full.sh \
+bash scripts/train/run_full_gad.sh \
   --model /tmp/Qwen2.5-7B-Instruct \
   --reward_model /tmp/Qwen2.5-7B-Instruct \
-  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
-  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
-  --exp_name gpt5-chat-filtered-7b-full \
+  --exp_name gpt5-chat-filtered-7b-gad \
+  --nnodes 1
+```
+
+This script automatically:
+1. Runs **Warmup** stage (2 epochs) to initialize discriminator
+2. Merges checkpoint models
+3. Runs **GAD** stage (4 epochs) for adversarial training
+
+#### Full SeqKD Training
+
+```bash
+bash scripts/train/run_full_seqkd.sh \
+  --model /tmp/Qwen2.5-7B-Instruct \
+  --exp_name gpt5-chat-filtered-7b-seqkd \
+  --nnodes 1
+```
+
+#### Full TLGAD Training (Token-Level Credit Assignment)
+
+TLGAD extends GAD with token-level credit assignment for finer-grained optimization:
+
+```bash
+bash scripts/train/run_full_tlgad.sh \
+  --model /tmp/Qwen2.5-7B-Instruct \
+  --reward_model /tmp/Qwen2.5-7B-Instruct \
+  --exp_name gpt5-chat-filtered-7b-tlgad \
+  --nnodes 1
+```
+
+This script automatically:
+1. Runs **Warmup** stage (2 epochs) to initialize discriminator
+2. Merges checkpoint models
+3. Runs **TLGAD** stage (4 epochs) with token-level credit assignment
+
+#### Optional Parameters
+
+Both scripts support additional parameters:
+
+```bash
+# GAD parameters
+--warmup_epochs 2          # Warmup epochs (default: 2)
+--gad_epochs 4             # GAD epochs (default: 4)
+--lr 1e-6                  # Learning rate (default: 1e-6 for GAD, 5e-6 for SeqKD)
+--train_batch_size 256     # Batch size (default: 256)
+--save_freq 50             # Save frequency (default: 50)
+
+# SeqKD parameters
+--total_epochs 4           # Total epochs (default: 4)
+--critic_warmup 10         # Critic warmup steps (default: 10)
+
+# TLGAD-specific parameters
+--tlgad_epochs 4           # TLGAD epochs (default: 4)
+--tlgad_lambda 0.8         # Modulation coefficient λ ∈ (0, 1] (default: 0.8)
+--tlgad_ema_momentum 0.99  # EMA momentum α ∈ (0.9, 0.999) (default: 0.99)
+```
+
+### LoRA Training (Parameter-Efficient Fine-tuning)
+
+For memory-efficient training, use the LoRA versions:
+
+#### Full GAD Training with LoRA
+
+```bash
+bash scripts/train/run_full_gad_lora.sh \
+  --model /tmp/Qwen2.5-7B-Instruct \
+  --reward_model /tmp/Qwen2.5-7B-Instruct \
+  --exp_name gpt5-chat-filtered-7b-gad-lora \
   --nnodes 1 \
-  --warmup_epochs 2 \
-  --gad_epochs 4 \
-  --resume_step 50
+  --lora_rank 32
 ```
 
-| 参数 | 说明 | 默认值 |
-|:---|:---|:---:|
-| `--model` | 学生模型路径 | 必填 |
-| `--reward_model` | 奖励模型路径 | 必填 |
-| `--train_files` | 训练数据路径 | `/tmp/lmsys_gpt5_chat_filtered_train.parquet` |
-| `--val_files` | 验证数据路径 | `/tmp/lmsys_gpt5_chat_filtered_test.parquet` |
-| `--exp_name` | 实验名称 | 必填 |
-| `--nnodes` | 节点数量 | 必填 |
-| `--warmup_epochs` | Warmup 轮数 | 2 |
-| `--gad_epochs` | GAD 训练轮数 | 4 |
-| `--resume_step` | 从 Warmup 恢复的检查点步数 | 50 |
-
-### 直接使用预训练模型
-
-如果你已有训练好的 HuggingFace 格式的 Actor 和 Critic 模型，可以直接进行 GAD 训练：
+#### Full SeqKD Training with LoRA
 
 ```bash
-bash scripts/train/run_gad_direct.sh \
-  --actor_path /path/to/pretrained/actor \
-  --critic_path /path/to/pretrained/critic \
-  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
-  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
-  --exp_name gpt5-chat-filtered-7b-direct \
-  --nnodes 1
-```
-
-| 参数 | 说明 | 默认值 |
-|:---|:---|:---:|
-| `--actor_path` | 预训练 Actor 模型路径 | 必填 |
-| `--critic_path` | 预训练 Critic 模型路径 | 必填 |
-| `--train_files` | 训练数据路径 | `/tmp/lmsys_gpt5_chat_filtered_train.parquet` |
-| `--val_files` | 验证数据路径 | `/tmp/lmsys_gpt5_chat_filtered_test.parquet` |
-| `--exp_name` | 实验名称 | `gad_direct` |
-| `--nnodes` | 节点数量 | 1 |
-
-### 分阶段训练
-
-```bash
-# 1. Warmup（必需）：初始化判别器并预热学生模型
-bash scripts/train/run_warmup.sh \
+bash scripts/train/run_full_seqkd_lora.sh \
   --model /tmp/Qwen2.5-7B-Instruct \
-  --reward_model /tmp/Qwen2.5-7B-Instruct \
-  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
-  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
-  --exp_name gpt5-chat-filtered-7b-warmup-lr1e-6 \
-  --nnodes 1
-
-# 2. GAD 训练（必需）：主对抗训练过程
-STEP=800
-mkdir /tmp/gpt5-chat-filtered-7b-adversarial-lr1e-6
-cp -r /tmp/gpt5-chat-filtered-7b-warmup-lr1e-6/global_step_${STEP} \
-  /tmp/gpt5-chat-filtered-7b-adversarial-lr1e-6/
-echo ${STEP} > /tmp/gpt5-chat-filtered-7b-adversarial-lr1e-6/latest_checkpointed_iteration.txt
-
-bash scripts/train/run_gad.sh \
-  --exp_name gpt5-chat-filtered-7b-adversarial-lr1e-6 \
-  --resume_step $STEP \
-  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
-  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
-  --nnodes 1
-
-# 3. SeqKD（可选）：在教师数据上 SFT，用于对比实验
-bash scripts/train/run_seqkd.sh \
-  --model /tmp/Qwen2.5-7B-Instruct \
-  --train_files /tmp/lmsys_gpt5_chat_filtered_train.parquet \
-  --val_files /tmp/lmsys_gpt5_chat_filtered_test.parquet \
-  --exp_name gpt5-chat-filtered-7b-seqkd-lr5e-6 \
-  --nnodes 1
+  --exp_name gpt5-chat-filtered-7b-seqkd-lora \
+  --nnodes 1 \
+  --lora_rank 32
 ```
 
-> 💡 SeqKD 是可选的对比基线，可以直接使用任意预训练模型从 Warmup 开始。
-
-### Python 脚本方式
+#### LoRA-Specific Parameters
 
 ```bash
-# 运行单个阶段
-python scripts/run_stage.py --stage seqkd --config configs/seqkd.yaml
-python scripts/run_stage.py --stage warmup --config configs/warmup.yaml
-python scripts/run_stage.py --stage gad --config configs/gad.yaml
-
-# 运行完整流水线
-python scripts/run_pipeline.py --config configs/pipeline.yaml
+--lora_rank 32             # LoRA rank (default: 32)
+--lr 1e-5                  # Learning rate for LoRA (default: 1e-5, higher than full fine-tuning)
 ```
 
----
+> **Note**: LoRA training uses higher learning rates (1e-5 vs 1e-6) and enables parameter/optimizer offloading for memory efficiency.
 
-## 🧪 模型评估
+## 🧪 Evaluation
+
+To generate outputs for evaluation:
 
 ```bash
-# 批量生成
 bash scripts/generate/parallel_generate.sh
+```
 
-# 单检查点生成
+Or for single checkpoint:
+
+```bash
 bash scripts/generate/generate.sh \
   --model /tmp/Qwen2.5-7B-Instruct \
   --exp_name gpt5-chat-filtered-7b-adversarial-lr1e-6 \
@@ -230,49 +185,87 @@ bash scripts/generate/generate.sh \
   --nnodes 1 --ngpus 2
 ```
 
----
-
-## 📁 项目结构
+## 📁 Project Structure
 
 ```
-EasyGAD/
-├── verl/                              # 核心 VeRL 库
+new_code/
+├── verl/                           # Core VeRL library
 │   ├── trainer/ppo/
-│   │   ├── ray_trainer.py             # 统一训练器
-│   │   └── core_algos.py              # PPO、SFT、GRPO 算法
-│   └── workers/
-│       ├── actor/dp_actor.py          # Actor 实现
-│       └── critic/dp_critic.py        # Critic/判别器
-├── deepscaler/                        # GAD 工具集
-│   ├── globals.py                     # 全局配置
-│   ├── system_prompts.py              # 评估系统提示
-│   └── rewards/                       # 奖励函数
+│   │   ├── ray_trainer.py          # Unified trainer with stage support
+│   │   └── core_algos.py           # PPO, SFT, GRPO algorithms
+│   ├── workers/
+│   │   ├── actor/dp_actor.py       # Actor with SFT/PPO support
+│   │   └── critic/dp_critic.py     # Critic/Discriminator
+│   └── utils/
+├── deepscaler/                     # Utilities for GAD
+│   ├── globals.py                  # Global configurations
+│   ├── system_prompts.py           # System prompts for evaluation
+│   ├── utils.py                    # LLM API utilities
+│   └── rewards/                    # Reward functions
 ├── tools/
-│   ├── export_lmsys_parquet.py        # 数据准备
-│   └── merge_model2hf.py              # 模型转换
-├── configs/                           # 配置文件
-│   ├── seqkd.yaml / warmup.yaml / gad.yaml / eval.yaml
-│   └── pipeline.yaml
-└── scripts/                           # 训练脚本
-    ├── train/ (run_seqkd.sh, run_warmup.sh, run_gad.sh, run_gad_direct.sh, run_gad_full.sh)
-    ├── generate/ (generate.sh, parallel_generate.sh)
-    ├── run_stage.py
-    └── run_pipeline.py
+│   ├── export_lmsys_parquet.py     # Data preparation
+│   └── merge_model2hf.py           # Model checkpoint conversion
+├── configs/
+│   ├── seqkd.yaml                  # SeqKD stage config
+│   ├── warmup.yaml                 # Warmup stage config
+│   ├── gad.yaml                    # GAD training config
+│   ├── tlgad.yaml                  # TLGAD training config
+│   ├── eval.yaml                   # Evaluation config
+│   └── pipeline.yaml               # Complete pipeline config
+├── scripts/
+│   ├── train/
+│   │   ├── run_full_gad.sh         # Full GAD pipeline (warmup + GAD)
+│   │   ├── run_full_seqkd.sh       # Full SeqKD training
+│   │   ├── run_full_tlgad.sh       # Full TLGAD pipeline (warmup + TLGAD)
+│   │   ├── run_full_gad_lora.sh    # Full GAD pipeline with LoRA
+│   │   └── run_full_seqkd_lora.sh  # Full SeqKD training with LoRA
+│   ├── generate/
+│   │   ├── generate.sh             # Generation script
+│   │   └── parallel_generate.sh    # Parallel generation
+│   ├── run_stage.py                # Single stage runner
+│   └── run_pipeline.py             # Pipeline runner
+└── README.md
 ```
 
----
+## 🔄 Training Stages
 
-## 📝 注意事项
+### Stage 1: Warmup (Required)
+- **Purpose**: Initialize discriminator and warm up student
+- **Method**: Student rollout → Discriminator score → SFT
+- **Output**: Checkpoint for GAD training
 
-- 训练过程中会记录 ROUGE-L 分数。GAD 的 ROUGE-L 分数可能低于 SeqKD，因为 ROUGE-L 主要衡量 n-gram 重叠，而非深层语义质量
-- 更高的 ROUGE-L 分数不一定对应更好的评估结果
-- ROUGE-L 仅作为训练诊断指标
+### Stage 2: GAD Training (Required)
+- **Purpose**: Main adversarial training
+- **Method**: Student rollout → Discriminator score → PPO
+- **Output**: Final trained model
 
----
+### Stage 2b: TLGAD Training (Alternative)
+- **Purpose**: Token-level credit assignment for finer-grained optimization
+- **Method**: Student rollout → Discriminator score → PPO with token-level credit
+- **Key Features**:
+  - Logit space transformation: r(y) = log[D(y)/(1-D(y))]
+  - Token-level credit assignment via policy divergence modulation
+  - Dynamic EMA reference policy update: θ_ref ← α · θ_ref + (1 - α) · θ
+- **Output**: Final trained model with token-level optimization
 
-## 📄 引用
+### Stage 3: Evaluation (Optional)
+- **Purpose**: Generate and evaluate outputs
+- **Method**: Inference only, no training
 
-如果 GAD 方法对你的研究有帮助，请引用原论文：
+### SeqKD (Optional Baseline)
+- **Purpose**: Baseline SFT on teacher responses for comparison
+- **Method**: Teacher forcing GRPO (no discriminator)
+- **Note**: Not required for GAD training. Use for ablation studies or as a baseline comparison.
+
+## 📝 Notes
+
+- During training, ROUGE-L scores are logged. The ROUGE-L scores of GAD can be lower than those of SeqKD because ROUGE-L primarily captures n-gram overlap rather than deeper stylistic or semantic qualities.
+- Higher ROUGE-L scores do not necessarily correspond to better performance in automatic or human evaluations.
+- ROUGE-L is used solely as a training diagnostic to verify optimization is proceeding normally.
+
+## 📄 Citation
+
+If you find this work useful, please cite our paper:
 
 ```bibtex
 @article{ye2025blackboxonpolicydistillationlarge,
@@ -284,18 +277,6 @@ EasyGAD/
 }
 ```
 
----
+## 📧 Contact
 
-## 🙏 致谢
-
-- 论文 [Black-Box On-Policy Distillation of Large Language Models](https://arxiv.org/abs/2511.10643)
-- [Microsoft LMOps](https://github.com/microsoft/LMOps) 官方实现
-- [veRL](https://github.com/YTianZHU/verl) 框架
-
----
-
-<div align="center">
-
-有问题或建议？欢迎提交 Issue
-
-</div>
+For any questions or issues, please open an issue in this repository.

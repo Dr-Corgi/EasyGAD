@@ -29,7 +29,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
-from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_sft_loss, get_policy_loss_fn, kl_penalty
+from verl.trainer.ppo.core_algos import agg_loss, compute_policy_loss, compute_sft_loss, get_policy_loss_fn, kl_penalty, apply_tlgad_token_modulation
 from verl.utils.debug import GPUMemoryLogger
 from verl.utils.device import get_device_id, get_device_name, is_cuda_available, is_npu_available
 from verl.utils.fsdp_utils import FSDPModule, fsdp2_clip_grad_norm_
@@ -79,6 +79,12 @@ class DataParallelPPOActor(BasePPOActor):
             else entropy_from_logits
         )
         self.device_name = get_device_name()
+
+        # TLGAD: EMA reference policy for token-level credit assignment
+        # θ_ref ← α · θ_ref + (1 - α) · θ
+        self.ema_reference_state = None  # Will be initialized on first update
+        self.ema_momentum = self.config.get("tlgad_ema_momentum", 0.99)  # α in the paper
+        self.use_ema_reference = self.config.get("use_ema_reference", False)
 
     def _forward_micro_batch(self, micro_batch, temperature, compute_teacher, calculate_entropy=False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -297,6 +303,65 @@ class DataParallelPPOActor(BasePPOActor):
             self.actor_optimizer.step()
         return grad_norm
 
+    def _init_ema_reference(self):
+        """Initialize EMA reference policy state from current actor."""
+        if self.ema_reference_state is None:
+            self.ema_reference_state = {}
+            with torch.no_grad():
+                for name, param in self.actor_module.named_parameters():
+                    if param.requires_grad:
+                        self.ema_reference_state[name] = param.data.clone().detach()
+            if torch.distributed.get_rank() == 0:
+                print("[TLGAD] Initialized EMA reference policy")
+
+    def _update_ema_reference(self):
+        """Update EMA reference policy: θ_ref ← α · θ_ref + (1 - α) · θ"""
+        if self.ema_reference_state is None:
+            self._init_ema_reference()
+            return
+
+        with torch.no_grad():
+            for name, param in self.actor_module.named_parameters():
+                if name in self.ema_reference_state and param.requires_grad:
+                    self.ema_reference_state[name].mul_(self.ema_momentum).add_(param.data, alpha=1 - self.ema_momentum)
+
+    def _get_ema_reference_log_prob(self, data: dict, temperature: float) -> torch.Tensor:
+        """Compute log probabilities using EMA reference policy.
+
+        Args:
+            data: micro batch data containing input_ids, attention_mask, position_ids, responses
+            temperature: temperature for softmax
+
+        Returns:
+            log_probs: shape (bs, response_length)
+        """
+        # Temporarily swap actor parameters with EMA reference
+        original_params = {}
+        with torch.no_grad():
+            for name, param in self.actor_module.named_parameters():
+                if name in self.ema_reference_state:
+                    original_params[name] = param.data.clone()
+                    param.data.copy_(self.ema_reference_state[name])
+
+        # Compute log probs with EMA reference
+        self.actor_module.eval()
+        with torch.no_grad():
+            _, log_probs = self._forward_micro_batch(
+                micro_batch=data,
+                compute_teacher=False,
+                temperature=temperature,
+                calculate_entropy=False
+            )
+
+        # Restore original parameters
+        with torch.no_grad():
+            for name, param in self.actor_module.named_parameters():
+                if name in original_params:
+                    param.data.copy_(original_params[name])
+
+        self.actor_module.train()
+        return log_probs
+
     @GPUMemoryLogger(role="dp actor", logger=logger)
     def compute_log_prob(self, data: DataProto, calculate_entropy=False) -> torch.Tensor:
         """Compute the log probability of the responses given input_ids, attention_mask and position_ids
@@ -429,6 +494,10 @@ class DataParallelPPOActor(BasePPOActor):
         multi_turn = data.meta_info.get("multi_turn", False)
         training_stage = data.meta_info.get("training_stage", "warmup")
 
+        # TLGAD: Initialize EMA reference at the start of training (before any processing)
+        if training_stage == "tlgad" and self.use_ema_reference and self.ema_reference_state is None:
+            self._init_ema_reference()
+
         data = self.deduplicate_by_uid(data)
 
         # Select keys based on training stage
@@ -438,6 +507,13 @@ class DataParallelPPOActor(BasePPOActor):
                 "teacher_response", "teacher_input_ids", "teacher_attention_mask", "teacher_position_ids"
             ]
             compute_teacher = True
+        elif training_stage == "tlgad":
+            # TLGAD mode: use student response with advantages and ref_log_probs for token-level modulation
+            select_keys = [
+                "responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages",
+            ]
+            compute_teacher = False
+            # TLGAD uses internal EMA reference, not external ref_log_prob
         else:
             # PPO mode (gad): use student response with advantages
             select_keys = [
@@ -551,7 +627,7 @@ class DataParallelPPOActor(BasePPOActor):
                             "actor/teacher_pg_loss": teacher_pg_loss.detach().item(),
                         }
                     else:
-                        # PPO mode (gad): use student response
+                        # PPO mode (gad/tlgad): use student response
                         responses = data["responses"]
                         response_length = responses.size(1)
                         attention_mask = data["attention_mask"]
@@ -561,9 +637,33 @@ class DataParallelPPOActor(BasePPOActor):
                             response_mask = attention_mask[:, -response_length:]
 
                         old_log_prob = data["old_log_probs"]
-                        advantages = data["advantages"]
+                        seq_advantages = data["advantages"]  # Sequence-level advantages from compute_tlgad_advantage
 
+                        # Forward pass to get current policy log_prob
                         entropy, log_prob = self._forward_micro_batch(micro_batch=data, compute_teacher=False, temperature=temperature, calculate_entropy=calculate_entropy)
+
+                        # TLGAD: Apply token-level modulation using current policy log_prob
+                        tlgad_metrics = {}
+                        if training_stage == "tlgad" and self.use_ema_reference:
+                            # Get EMA reference log probs for token-level credit assignment
+                            # d_{i,t} = log π_θ(y_t|x, y_{<t}) - log π_ref(y_t|x, y_{<t})
+                            ema_ref_log_prob = self._get_ema_reference_log_prob(data, temperature)
+
+                            # Get hyperparameters
+                            lambda_mod = self.config.get("tlgad_lambda", 0.8)
+                            temperature_eps = self.config.get("tlgad_temperature", None)  # ε in paper
+
+                            # Apply token-level modulation: A_{i,t} = A_seq(i) · (1 + λ · tanh(d_{i,t} / ε))
+                            advantages, tlgad_metrics = apply_tlgad_token_modulation(
+                                seq_advantages=seq_advantages,
+                                log_prob=log_prob,
+                                ref_log_prob=ema_ref_log_prob,
+                                response_mask=response_mask,
+                                lambda_mod=lambda_mod,
+                                temperature=temperature_eps,
+                            )
+                        else:
+                            advantages = seq_advantages
 
                         loss_mode = self.config.policy_loss.get("loss_mode", "clip_cov")
                         policy_loss_fn = get_policy_loss_fn(loss_mode)
@@ -586,9 +686,16 @@ class DataParallelPPOActor(BasePPOActor):
                             "actor/pg_clipfrac": pg_clipfrac.detach().item(),
                             "actor/ppo_kl": ppo_kl.detach().item(),
                         }
+                        # Add TLGAD metrics
+                        data.update(tlgad_metrics)
                     append_to_dict(metrics, data)
 
                 grad_norm = self._optimizer_step()
+
+                # TLGAD: Update EMA reference policy after optimizer step
+                if training_stage == "tlgad" and self.use_ema_reference:
+                    self._update_ema_reference()
+
                 data = {"actor/grad_norm": grad_norm.detach().item()}
                 append_to_dict(metrics, data)
         self.actor_optimizer.zero_grad()

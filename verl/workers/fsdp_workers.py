@@ -959,14 +959,41 @@ class CriticWorker(Worker, DistProfilerExtension):
         if self._is_lora:
             print("Applying LoRA to critic module")
             critic_module.enable_input_require_grads()
+
+            # Handle target_modules for critic model
+            # For critic (TokenClassification model), the 'score' layer is the classification head
+            # We want to keep it as full training (not LoRA) for better value function learning
+            target_modules = convert_to_regular_types(self.config.model.target_modules)
+
+            # Get all linear layer names from the model
+            linear_layers = [name for name, module in critic_module.named_modules() if isinstance(module, torch.nn.Linear)]
+
+            if target_modules == "all-linear":
+                # Exclude 'score' layer from LoRA, it will be trained fully via modules_to_save
+                target_modules = [name for name in linear_layers if name != "score"]
+                modules_to_save = ["score"]
+                print(f"Critic LoRA: Excluding 'score' layer from LoRA, it will be fully trained")
+            else:
+                # If user specified target_modules explicitly, check if 'score' is included
+                if isinstance(target_modules, list) and "score" in target_modules:
+                    target_modules = [m for m in target_modules if m != "score"]
+                    modules_to_save = ["score"]
+                    print(f"Critic LoRA: 'score' removed from target_modules, will be fully trained")
+                else:
+                    # User didn't include score in target_modules, keep it fully trained
+                    modules_to_save = ["score"] if "score" in linear_layers else []
+
             # Convert config to regular Python types before creating PEFT model
+            # Use FEATURE_EXTRACTION to avoid automatic modules_to_save handling by TOKEN_CLS
             lora_config = {
-                "task_type": TaskType.CAUSAL_LM,
+                "task_type": TaskType.FEATURE_EXTRACTION,
                 "r": self.config.model.lora_rank,
                 "lora_alpha": self.config.model.lora_alpha,
-                "target_modules": convert_to_regular_types(self.config.model.target_modules),
+                "target_modules": target_modules,
+                "modules_to_save": modules_to_save,
                 "bias": "none",
             }
+            print(f"Critic LoRA config: target_modules={target_modules}, modules_to_save={modules_to_save}")
             critic_module = get_peft_model(critic_module, LoraConfig(**lora_config))
 
         if self.rank == 0:

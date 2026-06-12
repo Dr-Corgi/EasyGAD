@@ -18,7 +18,7 @@ The function implemented in this file should be used by trainer with different d
 implement PPO-like algorithms.
 """
 
-__all__ = ["register_adv_est", "get_adv_estimator_fn", "AdvantageEstimator"]
+__all__ = ["register_adv_est", "get_adv_estimator_fn", "AdvantageEstimator", "apply_tlgad_token_modulation"]
 
 from collections import defaultdict
 from enum import Enum
@@ -111,6 +111,7 @@ class AdvantageEstimator(str, Enum):
     RLOO = "rloo"
     OPO = "opo"
     GRPO_PASSK = "grpo_passk"
+    TLGAD = "tlgad"  # Token-Level GAD with dynamic policy divergence
 
 
 class AdaptiveKLController:
@@ -261,6 +262,147 @@ def compute_grpo_outcome_advantage(
         scores = scores.unsqueeze(-1) * response_mask
 
     return scores, scores
+
+
+@register_adv_est(AdvantageEstimator.TLGAD)  # Token-Level GAD advantage estimator
+def compute_tlgad_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index: np.ndarray,
+    epsilon: float = 1e-8,
+    norm_adv_by_std_in_grpo: bool = True,
+    config=None,
+    **kwargs,
+):
+    """
+    Compute sequence-level advantage for TLGAD.
+
+    This computes the sequence-level advantage A_seq:
+    1. Logit space transformation: r(y) = log[D(y)/(1-D(y))] (discriminator outputs logits directly)
+    2. Group-relative advantage: A_seq(i) = [r(y^(i)) - mean(r)] / [std(r) + δ]
+
+    Token-level modulation is applied in update_policy using current policy log_prob.
+
+    Reference: Token-Level Credit Assignment via Dynamic Policy Divergence for GAD
+
+    Args:
+        token_level_rewards: `(torch.Tensor)`
+            shape is (bs, response_length) - discriminator logits
+        response_mask: `(torch.Tensor)`
+            shape is (bs, response_length)
+        index: `(np.ndarray)`
+            group id for each sample, shape is (bs,)
+        epsilon: `(float)`
+            numerical stability term for group normalization (δ in paper)
+        norm_adv_by_std_in_grpo: `(bool)`
+            whether to normalize advantage by std within group
+        config: `(dict)`
+            algorithm config
+
+    Returns:
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length) - sequence-level advantages (A_seq)
+        returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+    """
+    # Get hyperparameters from config if available
+    if config is not None:
+        epsilon = config.get("tlgad_epsilon", epsilon)
+        norm_adv_by_std_in_grpo = config.get("norm_adv_by_std_in_grpo", norm_adv_by_std_in_grpo)
+
+    # Step 1: Discriminator outputs logits, which is equivalent to logit transformation
+    # r(y) = log[D(y)/(1-D(y))] = logits (since D outputs logits)
+    # Sum over sequence for sequence-level reward
+    scores = token_level_rewards.sum(dim=-1)  # (bs,)
+
+    # Step 2: Group-relative advantage computation (same as GRPO)
+    id2score = defaultdict(list)
+    id2mean = {}
+    id2std = {}
+
+    with torch.no_grad():
+        bsz = scores.shape[0]
+        for i in range(bsz):
+            id2score[index[i]].append(scores[i])
+
+        for idx in id2score:
+            if len(id2score[idx]) == 1:
+                id2mean[idx] = torch.tensor(0.0, device=scores.device)
+                id2std[idx] = torch.tensor(1.0, device=scores.device)
+            elif len(id2score[idx]) > 1:
+                score_tensor = torch.stack(id2score[idx])
+                id2mean[idx] = torch.mean(score_tensor)
+                id2std[idx] = torch.std(score_tensor, correction=1)  # Bessel correction
+            else:
+                raise ValueError(f"no score in prompt index: {idx}")
+
+        # Compute sequence-level advantages A_seq
+        seq_advantages = torch.zeros_like(scores)
+        for i in range(bsz):
+            if norm_adv_by_std_in_grpo:
+                seq_advantages[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
+            else:
+                seq_advantages[i] = scores[i] - id2mean[index[i]]
+
+        # Broadcast to token-level (no modulation here, will be done in update_policy)
+        advantages = seq_advantages.unsqueeze(-1) * response_mask  # (bs, response_length)
+
+    return advantages, advantages
+
+
+def apply_tlgad_token_modulation(
+    seq_advantages: torch.Tensor,
+    log_prob: torch.Tensor,
+    ref_log_prob: torch.Tensor,
+    response_mask: torch.Tensor,
+    lambda_mod: float = 0.8,
+    temperature: float = None,
+):
+    """
+    Apply token-level modulation to sequence-level advantages.
+
+    A_{i,t} = A_seq(i) · (1 + λ · tanh(d_{i,t} / ε))
+    where d_{i,t} = log π_θ(y_t|x, y_{<t}) - log π_ref(y_t|x, y_{<t})
+
+    Args:
+        seq_advantages: `(torch.Tensor)` shape (bs, response_length) - sequence-level advantages
+        log_prob: `(torch.Tensor)` shape (bs, response_length) - current policy log probs
+        ref_log_prob: `(torch.Tensor)` shape (bs, response_length) - EMA reference log probs
+        response_mask: `(torch.Tensor)` shape (bs, response_length)
+        lambda_mod: `(float)` modulation coefficient λ ∈ (0, 1]
+        temperature: `(float)` temperature for tanh scaling ε, auto-computed if None
+
+    Returns:
+        advantages: `(torch.Tensor)` shape (bs, response_length) - token-level modulated advantages
+        metrics: `(dict)` metrics for logging
+    """
+    with torch.no_grad():
+        # Compute policy divergence d_{i,t} = log π_θ - log π_ref
+        policy_divergence = log_prob - ref_log_prob  # (bs, response_length)
+
+        # Compute adaptive temperature if not provided
+        # ε = std(d) as suggested in the paper
+        if temperature is None:
+            valid_divergence = policy_divergence[response_mask > 0]
+            if valid_divergence.numel() > 1:
+                temperature = torch.std(valid_divergence).item()
+                temperature = max(temperature, 0.1)  # Minimum temperature for stability
+            else:
+                temperature = 1.0
+
+        # Apply tanh modulation: A_{i,t} = A_seq(i) · (1 + λ · tanh(d_{i,t} / ε))
+        modulation_factor = 1.0 + lambda_mod * torch.tanh(policy_divergence / temperature)
+        advantages = seq_advantages * modulation_factor
+
+        # Compute metrics for logging
+        metrics = {
+            "tlgad/policy_divergence_mean": policy_divergence.mean().item(),
+            "tlgad/policy_divergence_std": policy_divergence.std().item() if policy_divergence.numel() > 1 else 0.0,
+            "tlgad/modulation_mean": modulation_factor.mean().item(),
+            "tlgad/temperature": temperature if isinstance(temperature, float) else temperature,
+        }
+
+    return advantages, metrics
 
 
 @register_adv_est(AdvantageEstimator.GRPO_PASSK)  # or simply: @register_adv_est("grpo_passk")

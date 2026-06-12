@@ -237,6 +237,12 @@ actor_rollout_ref:
     # recompute entropy
     entropy_checkpointing: False
 
+    # TLGAD: Whether to use EMA reference policy for KL computation
+    use_ema_reference: false
+
+    # TLGAD: EMA momentum α ∈ (0.9, 0.999) for reference policy update
+    tlgad_ema_momentum: 0.99
+
     # checkpoint configs
     checkpoint:
 
@@ -1085,11 +1091,17 @@ algorithm:
     # Power used for weight scaling in "pow" method
     weight_pow: 2.0
 
+  # TLGAD: Modulation coefficient λ ∈ (0, 1] for token-level credit assignment
+  tlgad_lambda: 0.8
+
+  # TLGAD: Temperature for tanh scaling in token-level advantage computation
+  tlgad_temperature: 1.0
+
 # config for the trainer
 trainer:
 
-  # Training stage identifier. Can be overridden by sub-configs (e.g., "gad", "warmup", "seqkd")
-  training_stage: null
+  # Training stage: "default", "warmup", or "tlgad"
+  training_stage: default
 
   # Whether to balance batch sizes across distributed workers
   balance_batch: True
